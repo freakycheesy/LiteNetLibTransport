@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using System.Runtime.Serialization;
 
 namespace LiteNetLib.Utils
 {
@@ -30,10 +32,10 @@ namespace LiteNetLib.Utils
             public virtual void Init(MethodInfo getMethod, MethodInfo setMethod, CallType type) { Type = type; }
             public abstract void Read(T inf, NetDataReader r);
             public abstract void Write(T inf, NetDataWriter w);
-            public virtual void ReadArray(T inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: " + typeof(T) + "[]"); }
-            public virtual void WriteArray(T inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: " + typeof(T) + "[]"); }
-            public virtual void ReadList(T inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: List<" + typeof(T) + ">"); }
-            public virtual void WriteList(T inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: List<" + typeof(T) + ">"); }
+            public abstract void ReadArray(T inf, NetDataReader r);
+            public abstract void WriteArray(T inf, NetDataWriter w);
+            public abstract void ReadList(T inf, NetDataReader r);
+            public abstract void WriteList(T inf, NetDataWriter w);
         }
 
         private abstract class FastCallSpecific<TClass, TProperty> : FastCall<TClass>
@@ -44,6 +46,11 @@ namespace LiteNetLib.Utils
             protected Action<TClass, TProperty[]> SetterArr;
             protected Func<TClass, List<TProperty>> GetterList;
             protected Action<TClass, List<TProperty>> SetterList;
+
+            public override void ReadArray(TClass inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: " + typeof(TProperty) + "[]"); }
+            public override void WriteArray(TClass inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: " + typeof(TProperty) + "[]"); }
+            public override void ReadList(TClass inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: List<" + typeof(TProperty) + ">"); }
+            public override void WriteList(TClass inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: List<" + typeof(TProperty) + ">"); }
 
             protected TProperty[] ReadArrayHelper(TClass inf, NetDataReader r)
             {
@@ -115,8 +122,7 @@ namespace LiteNetLib.Utils
 
             public override void Read(TClass inf, NetDataReader r)
             {
-                TProperty elem;
-                ElementRead(r, out elem);
+                ElementRead(r, out var elem);
                 Setter(inf, elem);
             }
 
@@ -155,6 +161,28 @@ namespace LiteNetLib.Utils
             public override void Read(TClass inf, NetDataReader r) { Setter(inf, _reader(r)); }
             public override void Write(TClass inf, NetDataWriter w) { _writer(w, Getter(inf)); }
 
+            public override void ReadList(TClass inf, NetDataReader r)
+            {
+                var list = ReadListHelper(inf, r, out int len);
+                int listCount = list.Count;
+                for (int i = 0; i < len; i++)
+                {
+                    if (i < listCount)
+                        list[i] = _reader(r);
+                    else
+                        list.Add(_reader(r));
+                }
+                if (len < listCount)
+                    list.RemoveRange(len, listCount - len);
+            }
+
+            public override void WriteList(TClass inf, NetDataWriter w)
+            {
+                var list = WriteListHelper(inf, w, out int len);
+                for (int i = 0; i < len; i++)
+                    _writer(w, list[i]);
+            }
+
             public override void ReadArray(TClass inf, NetDataReader r)
             {
                 var arr = ReadArrayHelper(inf, r);
@@ -190,31 +218,24 @@ namespace LiteNetLib.Utils
 
             public override void ReadList(TClass inf, NetDataReader r)
             {
-                int len;
-                var list = ReadListHelper(inf, r, out len);
+                var list = ReadListHelper(inf, r, out int len);
                 int listCount = list.Count;
-                if (len > listCount)
-                {
-                    for (int i = 0; i < listCount; i++)
-                        list[i].Deserialize(r);
-                    for (int i = listCount; i < len; i++)
-                    {
-                        var itm = default(TProperty);
-                        itm.Deserialize(r);
-                        list.Add(itm);
-                    }
-                    return;
-                }
-                if(len < listCount)
-                    list.RemoveRange(len, listCount - len);
                 for (int i = 0; i < len; i++)
-                    list[i].Deserialize(r);
+                {
+                    var itm = default(TProperty);
+                    itm.Deserialize(r);
+                    if(i < listCount)
+                        list[i] = itm;
+                    else
+                        list.Add(itm);
+                }
+                if (len < listCount)
+                    list.RemoveRange(len, listCount - len);
             }
 
             public override void WriteList(TClass inf, NetDataWriter w)
             {
-                int len;
-                var list = WriteListHelper(inf, w, out len);
+                var list = WriteListHelper(inf, w, out int len);
                 for (int i = 0; i < len; i++)
                     list[i].Serialize(w);
             }
@@ -251,37 +272,33 @@ namespace LiteNetLib.Utils
             public override void Write(TClass inf, NetDataWriter w)
             {
                 var p = Getter(inf);
-                if(p != null)
-                    p.Serialize(w);
+                p?.Serialize(w);
             }
 
             public override void ReadList(TClass inf, NetDataReader r)
             {
-                int len;
-                var list = ReadListHelper(inf, r, out len);
+                var list = ReadListHelper(inf, r, out int len);
                 int listCount = list.Count;
-                if (len > listCount)
+                for (int i = 0; i < len; i++)
                 {
-                    for (int i = 0; i < listCount; i++)
+                    if (i < listCount)
+                    {
                         list[i].Deserialize(r);
-                    for (int i = listCount; i < len; i++)
+                    }
+                    else
                     {
                         var itm = _constructor();
                         itm.Deserialize(r);
                         list.Add(itm);
                     }
-                    return;
                 }
                 if (len < listCount)
                     list.RemoveRange(len, listCount - len);
-                for (int i = 0; i < len; i++)
-                    list[i].Deserialize(r);
             }
 
             public override void WriteList(TClass inf, NetDataWriter w)
             {
-                int len;
-                var list = WriteListHelper(inf, w, out len);
+                var list = WriteListHelper(inf, w, out int len);
                 for (int i = 0; i < len; i++)
                     list[i].Serialize(w);
             }
@@ -405,6 +422,12 @@ namespace LiteNetLib.Utils
             protected override void ElementWrite(NetDataWriter w, ref IPEndPoint prop) { w.Put(prop); }
             protected override void ElementRead(NetDataReader r, out IPEndPoint prop) { prop = r.GetNetEndPoint(); }
         }
+        
+        private class GuidSerializer<T> : FastCallSpecificAuto<T, Guid>
+        {
+            protected override void ElementWrite(NetDataWriter w, ref Guid guid) { w.Put(guid); }
+            protected override void ElementRead(NetDataReader r, out Guid guid) { guid = r.GetGuid(); }
+        }
 
         private class StringSerializer<T> : FastCallSpecific<T, string>
         {
@@ -427,6 +450,10 @@ namespace LiteNetLib.Utils
             }
             public override void Read(T inf, NetDataReader r) { Property.SetValue(inf, Enum.ToObject(PropertyType, r.GetByte()), null); }
             public override void Write(T inf, NetDataWriter w) { w.Put((byte)Property.GetValue(inf, null)); }
+            public override void ReadArray(T inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: Enum[]"); }
+            public override void WriteArray(T inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: Enum[]"); }
+            public override void ReadList(T inf, NetDataReader r) { throw new InvalidTypeException("Unsupported type: List<Enum>"); }
+            public override void WriteList(T inf, NetDataWriter w) { throw new InvalidTypeException("Unsupported type: List<Enum>"); }
         }
 
         private class EnumIntSerializer<T> : EnumByteSerializer<T>
@@ -548,13 +575,16 @@ namespace LiteNetLib.Utils
             _maxStringLength = maxStringLength;
         }
 
-        private ClassInfo<T> RegisterInternal<T>()
+        private ClassInfo<T> RegisterInternal<
+#if NET5_0_OR_GREATER
+        [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+            T>()
         {
             if (ClassInfo<T>.Instance != null)
                 return ClassInfo<T>.Instance;
 
-            Type t = typeof(T);
-            var props = t.GetProperties(
+            var props = typeof(T).GetProperties(
                 BindingFlags.Instance |
                 BindingFlags.Public |
                 BindingFlags.GetProperty |
@@ -573,6 +603,9 @@ namespace LiteNetLib.Utils
                     elementType = propertyType.GetGenericArguments()[0];
                     callType = CallType.List;
                 }
+
+                if (Attribute.IsDefined(property, typeof(IgnoreDataMemberAttribute)))
+                    continue;
 
                 var getMethod = property.GetGetMethod();
                 var setMethod = property.GetSetMethod();
@@ -618,10 +651,11 @@ namespace LiteNetLib.Utils
                     serialzer = new CharSerializer<T>();
                 else if (elementType == typeof(IPEndPoint))
                     serialzer = new IPEndPointSerializer<T>();
+                else if (elementType == typeof(Guid))
+                    serialzer = new GuidSerializer<T>();
                 else
                 {
-                    CustomType customType;
-                    _registeredTypes.TryGetValue(elementType, out customType);
+                    _registeredTypes.TryGetValue(elementType, out var customType);
                     if (customType != null)
                         serialzer = customType.Get<T>();
                 }
@@ -641,7 +675,11 @@ namespace LiteNetLib.Utils
         }
 
         /// <exception cref="InvalidTypeException"><typeparamref name="T"/>'s fields are not supported, or it has no fields</exception>
-        public void Register<T>()
+        public void Register<
+#if NET5_0_OR_GREATER
+            [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+        T>()
         {
             RegisterInternal<T>();
         }
@@ -652,7 +690,11 @@ namespace LiteNetLib.Utils
         /// <param name="reader">NetDataReader with packet</param>
         /// <returns>Returns packet if packet in reader is matched type</returns>
         /// <exception cref="InvalidTypeException"><typeparamref name="T"/>'s fields are not supported, or it has no fields</exception>
-        public T Deserialize<T>(NetDataReader reader) where T : class, new()
+        public T Deserialize<
+#if NET5_0_OR_GREATER
+            [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+        T>(NetDataReader reader) where T : class, new()
         {
             var info = RegisterInternal<T>();
             var result = new T();
@@ -674,7 +716,11 @@ namespace LiteNetLib.Utils
         /// <param name="target">Deserialization target</param>
         /// <returns>Returns true if packet in reader is matched type</returns>
         /// <exception cref="InvalidTypeException"><typeparamref name="T"/>'s fields are not supported, or it has no fields</exception>
-        public bool Deserialize<T>(NetDataReader reader, T target) where T : class, new()
+        public bool Deserialize<
+#if NET5_0_OR_GREATER
+            [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+        T>(NetDataReader reader, T target) where T : class, new()
         {
             var info = RegisterInternal<T>();
             try
@@ -694,7 +740,11 @@ namespace LiteNetLib.Utils
         /// <param name="writer">Serialization target NetDataWriter</param>
         /// <param name="obj">Object to serialize</param>
         /// <exception cref="InvalidTypeException"><typeparamref name="T"/>'s fields are not supported, or it has no fields</exception>
-        public void Serialize<T>(NetDataWriter writer, T obj) where T : class, new()
+        public void Serialize<
+#if NET5_0_OR_GREATER
+            [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+        T>(NetDataWriter writer, T obj) where T : class, new()
         {
             RegisterInternal<T>().Write(obj, writer);
         }
@@ -704,7 +754,11 @@ namespace LiteNetLib.Utils
         /// </summary>
         /// <param name="obj">Object to serialize</param>
         /// <returns>byte array with serialized data</returns>
-        public byte[] Serialize<T>(T obj) where T : class, new()
+        public byte[] Serialize<
+#if NET5_0_OR_GREATER
+            [DynamicallyAccessedMembers(Trimming.SerializerMemberTypes)]
+#endif
+        T>(T obj) where T : class, new()
         {
             if (_writer == null)
                 _writer = new NetDataWriter();

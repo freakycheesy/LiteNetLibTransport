@@ -5,13 +5,10 @@ using System.Net;
 using LiteNetLib;
 using LiteNetLibMirror;
 using UnityEngine;
-
 namespace Mirror
 {
     public class LiteNetLibTransport : Transport
     {
-        static readonly ILogger logger = LogFactory.GetLogger<LiteNetLibTransport>();
-
         [Header("Config")]
         public ushort port = 8888;
         public int updateTime = 15;
@@ -68,12 +65,12 @@ namespace Mirror
 
         void Awake()
         {
-            logger.Log("LiteNetLibTransport initialized!");
+            Debug.Log("LiteNetLibTransport initialized!");
         }
 
         public override void Shutdown()
         {
-            logger.Log("LiteNetLibTransport Shutdown");
+            Debug.Log("LiteNetLibTransport Shutdown");
             client?.Disconnect();
             server?.Stop();
         }
@@ -84,7 +81,7 @@ namespace Mirror
             return Application.platform != RuntimePlatform.WebGLPlayer;
         }
 
-        public override int GetMaxPacketSize(int channelId = Channels.DefaultReliable)
+        public override int GetMaxPacketSize(int channelId = 0)
         {
             // LiteNetLib NetPeer construct calls SetMTU(0), which sets it to
             // NetConstants.PossibleMtu[0] which is 576-68.
@@ -185,11 +182,11 @@ namespace Mirror
         {
             if (client != null)
             {
-                logger.LogWarning("Can't start client as one was already connected");
+                Debug.LogWarning("Can't start client as one was already connected");
                 return;
             }
 
-            client = new Client(port, updateTime, disconnectTimeout, logger);
+            client = new Client(port, updateTime, disconnectTimeout);
 
             client.onConnected += OnClientConnected.Invoke;
             client.onData += Client_onData;
@@ -226,31 +223,17 @@ namespace Mirror
             }
         }
 
-#if MIRROR_26_0_OR_NEWER
-        public override void ClientSend(int channelId, ArraySegment<byte> segment)
+        public override void ClientSend(ArraySegment<byte> segment, int channelId = 0)
         {
             if (client == null || !client.Connected)
             {
-                logger.LogWarning("Can't send when client is not connected");
+                Debug.LogWarning("Can't send when client is not connected");
                 return;
             }
 
             DeliveryMethod deliveryMethod = channels[channelId];
             client.Send(deliveryMethod, segment);
         }
-#else
-        public override bool ClientSend(int channelId, ArraySegment<byte> segment)
-        {
-            if (client == null || !client.Connected)
-            {
-                logger.LogWarning("Can't send when client is not connected");
-                return false;
-            }
-
-            DeliveryMethod deliveryMethod = channels[channelId];
-            return client.Send(deliveryMethod, segment);
-        }
-#endif
         #endregion
 
 
@@ -261,13 +244,13 @@ namespace Mirror
         {
             if (server != null)
             {
-                logger.LogWarning("Can't start server as one was already active");
+                Debug.LogWarning("Can't start server as one was already active");
                 return;
             }
 
-            server = new Server(port, updateTime, disconnectTimeout, connectKey, logger);
+            server = new Server(port, updateTime, disconnectTimeout, connectKey);
 
-            server.onConnected += OnServerConnected.Invoke;
+            server.onConnected += (x) => OnServerConnectedWithAddress.Invoke(x, "");
             server.onData += Server_onData;
             server.onDisconnected += OnServerDisconnected.Invoke;
 
@@ -292,7 +275,7 @@ namespace Mirror
         {
             if (server != null)
             {
-                server.onConnected -= OnServerConnected.Invoke;
+                server.onConnected -= (x) => OnServerConnectedWithAddress.Invoke(x, "");
                 server.onData -= Server_onData;
                 server.onDisconnected -= OnServerDisconnected.Invoke;
 
@@ -301,45 +284,30 @@ namespace Mirror
             }
             else
             {
-                logger.LogWarning("Can't stop server as no server was active");
+                Debug.LogWarning("Can't stop server as no server was active");
             }
         }
 
-#if MIRROR_26_0_OR_NEWER 
-        public override void ServerSend(int connectionId, int channelId, ArraySegment<byte> segment)
+        public override void ServerSend(int connectionId, ArraySegment<byte> segment, int channelId = 0)
         {
             if (server == null)
             {
-                logger.LogWarning("Can't send when Server is not active");
+                Debug.LogWarning("Can't send when Server is not active");
                 return;
             }
 
             DeliveryMethod deliveryMethod = channels[channelId];
-            server.SendOne(connectionId, deliveryMethod, segment);
+            server.Send(connectionId, deliveryMethod, segment);
         }
-#else
-        public override bool ServerSend(System.Collections.Generic.List<int> connectionIds, int channelId, ArraySegment<byte> segment)
+
+        public override void ServerDisconnect(int connectionId)
         {
             if (server == null)
             {
-                logger.LogWarning("Can't send when Server is not active");
-                return false;
+                Debug.LogWarning("Can't disconnect when Server is not active");
             }
 
-            DeliveryMethod deliveryMethod = channels[channelId];
-            return server.Send(connectionIds, deliveryMethod, segment);
-        }
-#endif
-
-        public override bool ServerDisconnect(int connectionId)
-        {
-            if (server == null)
-            {
-                logger.LogWarning("Can't disconnect when Server is not active");
-                return false;
-            }
-
-            return server.Disconnect(connectionId);
+            server.Disconnect(connectionId);
         }
 
         public override string ServerGetClientAddress(int connectionId)
